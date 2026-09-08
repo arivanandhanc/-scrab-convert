@@ -14,6 +14,7 @@ import {
   UpdateFunctionCodeCommand,
   UpdateFunctionConfigurationCommand,
   GetFunctionCommand,
+  GetFunctionConfigurationCommand,
   CreateFunctionUrlConfigCommand,
   GetFunctionUrlConfigCommand,
   UpdateFunctionUrlConfigCommand,
@@ -106,8 +107,31 @@ async function waitUntilSettled() {
   throw new Error("Function did not become ready within two minutes.");
 }
 
+/**
+ * Merge with whatever is already on the function, rather than replacing it.
+ *
+ * UpdateFunctionConfiguration replaces the environment wholesale: any variable
+ * not named in this call is deleted. Secrets are deliberately not in this file
+ * -- they are set by hand in the console and must never be committed -- so a
+ * plain overwrite silently removes them on the next deploy, and the service
+ * comes back up unable to authenticate anything. That is exactly what happened
+ * on the first deploy after the lockdown shipped.
+ *
+ * The values below still win for the keys they own; everything else survives.
+ */
+async function mergedEnv() {
+  const { Environment } = await lambda.send(
+    new GetFunctionConfigurationCommand({ FunctionName: NAME })
+  );
+  return { ...(Environment?.Variables ?? {}), ...env };
+}
+
 if (await exists()) {
   console.log("updating existing function");
+  const preserved = await mergedEnv();
+  const kept = Object.keys(preserved).filter((k) => !(k in env));
+  if (kept.length) console.log(`preserving ${kept.length} manually-set variable(s): ${kept.join(", ")}`);
+
   await lambda.send(new UpdateFunctionCodeCommand({ FunctionName: NAME, ImageUri: IMAGE }));
   await waitUntilSettled();
   await lambda.send(new UpdateFunctionConfigurationCommand({
@@ -115,7 +139,7 @@ if (await exists()) {
     MemorySize: MEMORY_MB,
     Timeout: TIMEOUT_S,
     EphemeralStorage: { Size: EPHEMERAL_MB },
-    Environment: { Variables: env },
+    Environment: { Variables: preserved },
   }));
 } else {
   console.log("creating function");
