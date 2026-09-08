@@ -27,7 +27,7 @@ import {
 import {
   CloudWatchLogsClient, CreateLogGroupCommand, PutRetentionPolicyCommand,
 } from "@aws-sdk/client-cloudwatch-logs";
-import { BudgetsClient, CreateBudgetCommand } from "@aws-sdk/client-budgets";
+import { BudgetsClient, CreateBudgetCommand, UpdateBudgetCommand } from "@aws-sdk/client-budgets";
 import { STSClient, GetCallerIdentityCommand } from "@aws-sdk/client-sts";
 
 const REGION = process.env.AWS_REGION ?? "ap-south-1";
@@ -45,8 +45,17 @@ const KEEP_IMAGES = 1;
 /** Logs are for debugging a failure that just happened, not an archive. */
 const LOG_RETENTION_DAYS = 3;
 
-/** Ceiling in USD. Alerts fire at 50% and 100% of this. */
-const MONTHLY_BUDGET_USD = "0.60";
+/**
+ * Ceiling in USD, chosen to sit at roughly Rs 100/month. Alerts fire at 50%,
+ * 100% and — because the useful warning is the one that arrives before the
+ * money is spent — on the forecast for the month.
+ *
+ * Expected steady-state spend is a fraction of this: ECR storage for one image
+ * plus three days of logs, with Lambda itself inside the free tier. The gap
+ * between expected and threshold is deliberate, so the alarm means "something
+ * changed" rather than firing every month on normal use.
+ */
+const MONTHLY_BUDGET_USD = "1.20";
 
 const say = (ok, msg) => console.log(`${ok ? "  ok" : "SKIP"}  ${msg}`);
 
@@ -181,26 +190,45 @@ if (!email) {
   say(false, "budget alert — set ALERT_EMAIL to create it");
 } else {
   const budgets = new BudgetsClient({ region: "us-east-1" }); // Budgets is us-east-1 only.
-  await idempotent(`budget $${MONTHLY_BUDGET_USD}/month → ${email}`, () =>
-    budgets.send(new CreateBudgetCommand({
+
+  const budget = {
+    BudgetName: `${NAME}-monthly`,
+    BudgetLimit: { Amount: MONTHLY_BUDGET_USD, Unit: "USD" },
+    TimeUnit: "MONTHLY",
+    BudgetType: "COST",
+  };
+
+  // Two ACTUAL thresholds for money already spent, and one FORECASTED, which
+  // is the one that actually helps: it fires when AWS projects the month will
+  // end over budget, days before it does.
+  const notifications = [
+    { NotificationType: "ACTUAL", Threshold: 50 },
+    { NotificationType: "ACTUAL", Threshold: 100 },
+    { NotificationType: "FORECASTED", Threshold: 100 },
+  ].map((n) => ({
+    Notification: {
+      NotificationType: n.NotificationType,
+      ComparisonOperator: "GREATER_THAN",
+      Threshold: n.Threshold,
+      ThresholdType: "PERCENTAGE",
+    },
+    Subscribers: [{ SubscriptionType: "EMAIL", Address: email }],
+  }));
+
+  try {
+    await budgets.send(new CreateBudgetCommand({
       AccountId: account,
-      Budget: {
-        BudgetName: `${NAME}-monthly`,
-        BudgetLimit: { Amount: MONTHLY_BUDGET_USD, Unit: "USD" },
-        TimeUnit: "MONTHLY",
-        BudgetType: "COST",
-      },
-      NotificationsWithSubscribers: [50, 100].map((pct) => ({
-        Notification: {
-          NotificationType: "ACTUAL",
-          ComparisonOperator: "GREATER_THAN",
-          Threshold: pct,
-          ThresholdType: "PERCENTAGE",
-        },
-        Subscribers: [{ SubscriptionType: "EMAIL", Address: email }],
-      })),
-    }))
-  );
+      Budget: budget,
+      NotificationsWithSubscribers: notifications,
+    }));
+    say(true, `budget $${MONTHLY_BUDGET_USD}/month → ${email}`);
+  } catch (err) {
+    if (err.name !== "DuplicateRecordException") throw err;
+    // Raising or lowering the threshold is the whole reason to re-run this, so
+    // an existing budget is updated rather than skipped.
+    await budgets.send(new UpdateBudgetCommand({ AccountId: account, NewBudget: budget }));
+    say(true, `budget updated to $${MONTHLY_BUDGET_USD}/month`);
+  }
 }
 
 // Read back what was created, and say plainly when nothing was. A stack trace
