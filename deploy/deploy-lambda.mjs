@@ -127,7 +127,7 @@ if (await exists()) {
     Timeout: TIMEOUT_S,
     EphemeralStorage: { Size: EPHEMERAL_MB },
     Environment: { Variables: env },
-    Description: "LibreOffice document conversion. github.com/arivanandhanc/scrab-convert",
+    Description: "LibreOffice document conversion. github.com/arivanandhanc/-scrab-convert",
   }));
 }
 
