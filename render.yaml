@@ -1,0 +1,53 @@
+# Render Blueprint — everything pre-set so the deploy is three clicks.
+#
+# Render reads this on "New → Blueprint" and creates the service already
+# configured. Nothing here needs typing into the dashboard, which matters
+# because the settings that are easy to get wrong (concurrency against the free
+# plan's memory, the health check path the pool router depends on) are exactly
+# the ones a form invites you to skip.
+
+services:
+  - type: web
+    name: scrab-convert
+    runtime: docker
+    plan: free
+    # Singapore is the closest region to India and matches where the existing
+    # tools API already runs, so the two are not on opposite sides of the world.
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    # Render polls this. It doubles as the endpoint the client-side pool router
+    # uses to rank instances, so it has to stay cheap and truthful.
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # THE setting that matters on this plan. Free instances are 512 MB and a
+      # LibreOffice process wants 250-400 MB of that, so two at once gets the
+      # container OOM-killed mid-conversion — which Render reports as a crash,
+      # not a failed request, making it look like the service is broken rather
+      # than busy. One at a time, and the queue turns extra load into an honest
+      # 503 the caller can act on.
+      - key: MAX_CONCURRENT
+        value: "1"
+
+      # A free instance is slower than the hardware this default was written
+      # for, so allow longer before declaring a conversion hung. Still a hard
+      # ceiling: past this the process is killed and the caller gets a 504.
+      - key: CONVERT_TIMEOUT_MS
+        value: "90000"
+
+      # With concurrency at 1, a second user arriving mid-conversion waits.
+      # Twenty seconds is about as long as that is reasonable; beyond it they
+      # get a 503 and the pool router sends them elsewhere.
+      - key: QUEUE_TIMEOUT_MS
+        value: "20000"
+
+      # Well under the memory ceiling: a 25 MB DOCX can expand to several times
+      # that once LibreOffice parses it.
+      - key: MAX_UPLOAD_BYTES
+        value: "20971520"
+
+      # Set this to the site that will call the service once its domain exists.
+      # Left unset the service accepts any origin, which is fine while testing
+      # and wrong in production.
+      - key: CORS_ORIGINS
+        sync: false

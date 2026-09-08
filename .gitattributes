@@ -1,0 +1,4 @@
+# Windows checkouts must not put CRLF into files that Linux executes.
+# A CRLF in a Dockerfile breaks RUN continuations in ways the build log
+# reports as a syntax error three lines away from the real cause.
+* text=auto eol=lf
