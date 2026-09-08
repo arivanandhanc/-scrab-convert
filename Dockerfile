@@ -31,10 +31,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man /var/cache/apt/*
 
+# AWS Lambda Web Adapter.
+#
+# Lambda normally requires the app to implement its Runtime API — a rewrite of
+# the whole HTTP layer. The adapter is a Lambda extension that speaks the
+# Runtime API on the app's behalf and forwards each invocation to the ordinary
+# web server already listening on $PORT. So the same image runs unmodified on
+# Lambda, Render, Cloud Run or a laptop.
+#
+# Outside Lambda this is an unused file: /opt/extensions is only read by the
+# Lambda runtime, so it costs a few megabytes and changes nothing.
+COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.9.1 \
+     /lambda-adapter /opt/extensions/lambda-adapter
+
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install --omit=dev
+# The lockfile comes too, so `npm ci` can install the exact tree that was
+# tested rather than whatever `install` resolves on the day of the build.
+# --omit=dev skips the AWS SDK packages, which only the bootstrap script uses.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 COPY src ./src
 
@@ -43,6 +59,11 @@ COPY src ./src
 # does) leave / read-only, so point everything at /tmp.
 ENV HOME=/tmp
 ENV PORT=8080
+
+# The adapter polls this before forwarding the first invocation. It defaults to
+# "/", which this service does not serve — the container would be judged
+# unhealthy and every cold start would fail. Point it at the route that exists.
+ENV AWS_LWA_READINESS_CHECK_PATH=/health
 
 # Warm the profile at build time so the first real request doesn't pay for it.
 # Without this the first conversion after a cold start takes several seconds
