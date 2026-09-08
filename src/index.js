@@ -116,6 +116,25 @@ app.get("/health", (_req, res) => {
   });
 });
 
+/**
+ * Root. Exists because a bare Express 404 here reads as "the deployment is
+ * broken" to anyone who pastes the URL into a browser — which is the first
+ * thing everybody does with a new endpoint.
+ */
+app.get("/", (_req, res) => {
+  res.json({
+    service: "scrab-convert",
+    what: "Document conversion via LibreOffice. Office formats, PDF, and the text and spreadsheet formats in between.",
+    endpoints: {
+      "GET /health": "liveness and current load",
+      "GET /capabilities": "which formats can be read and written",
+      "POST /convert?to=<format>": "multipart form, field name 'file'",
+    },
+    example: `curl -X POST "<this-url>/convert?to=pdf" -F "file=@report.docx" -o report.pdf`,
+    maxUploadBytes: MAX_UPLOAD_BYTES,
+  });
+});
+
 /** The format matrix, so the frontend badge never drifts from reality. */
 app.get("/capabilities", (_req, res) => {
   res.json({
