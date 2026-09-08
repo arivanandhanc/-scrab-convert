@@ -16,7 +16,9 @@
         "ecr:PutImage",
         "ecr:BatchDeleteImage",
         "ecr:PutLifecyclePolicy",
-        "ecr:GetLifecyclePolicy"
+        "ecr:GetLifecyclePolicy",
+        "ecr:SetRepositoryPolicy",
+        "ecr:GetRepositoryPolicy"
       ],
       "Resource": "*"
     },

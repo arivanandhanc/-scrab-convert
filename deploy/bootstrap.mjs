@@ -19,6 +19,7 @@
 
 import {
   ECRClient, CreateRepositoryCommand, PutLifecyclePolicyCommand, DescribeRepositoriesCommand,
+  SetRepositoryPolicyCommand,
 } from "@aws-sdk/client-ecr";
 import {
   IAMClient, CreateRoleCommand, AttachRolePolicyCommand, GetRoleCommand,
@@ -92,6 +93,37 @@ await idempotent(`ECR lifecycle policy (keep ${KEEP_IMAGES})`, () =>
         description: `Keep only the ${KEEP_IMAGES} most recent image(s); storage is billed monthly.`,
         selection: { tagStatus: "any", countType: "imageCountMoreThan", countNumber: KEEP_IMAGES },
         action: { type: "expire" },
+      }],
+    }),
+  }))
+);
+
+/**
+ * Let Lambda pull from this repository.
+ *
+ * Lambda fetches the image as its own service principal, not as the caller, so
+ * being in the same account is not enough — without this the function refuses
+ * to create with "Lambda does not have permission to access the ECR image",
+ * which sounds like a caller-credentials problem and is not one. The console
+ * adds this policy silently when you choose an image; the API does not, so it
+ * belongs here.
+ *
+ * The sourceArn condition keeps the grant to this account's functions rather
+ * than to the Lambda service at large.
+ */
+await idempotent("ECR policy allowing Lambda to pull", () =>
+  ecr.send(new SetRepositoryPolicyCommand({
+    repositoryName: NAME,
+    policyText: JSON.stringify({
+      Version: "2012-10-17",
+      Statement: [{
+        Sid: "LambdaECRImageRetrievalPolicy",
+        Effect: "Allow",
+        Principal: { Service: "lambda.amazonaws.com" },
+        Action: ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+        Condition: {
+          StringLike: { "aws:sourceArn": `arn:aws:lambda:${REGION}:${account}:function:*` },
+        },
       }],
     }),
   }))
