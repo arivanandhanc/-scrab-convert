@@ -1,0 +1,92 @@
+# Build the image and ship it to Lambda.
+#
+# This runs in CI rather than on a laptop for a practical reason: the image is
+# built for linux/amd64 and needs Docker, and the machine this project is
+# developed on has neither. GitHub's runners have both, and are free for public
+# repositories.
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  # Manual runs, for redeploying without a code change.
+  workflow_dispatch:
+
+# One deploy at a time. Two overlapping runs would race on UpdateFunctionCode
+# and the second would fail on a function still settling from the first.
+concurrency:
+  group: deploy-lambda
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: scrab-convert
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install deploy dependencies
+        run: npm ci
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          # Tagged with the commit sha so a deploy is traceable to a commit, and
+          # with :latest so the ECR lifecycle rule has a stable thing to keep.
+          IMAGE="$REGISTRY/$ECR_REPOSITORY:${GITHUB_SHA::7}"
+          # Lambda runs x86_64 unless the function is built for arm64, and the
+          # runner is x86_64 too, so no emulation is involved.
+          docker build --platform linux/amd64 -t "$IMAGE" -t "$REGISTRY/$ECR_REPOSITORY:latest" .
+          docker push "$IMAGE"
+          docker push "$REGISTRY/$ECR_REPOSITORY:latest"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "Image size:"
+          docker image inspect "$IMAGE" --format '{{.Size}}' | awk '{printf "  %.0f MB\n", $1/1024/1024}'
+
+      - name: Deploy to Lambda
+        run: node deploy/deploy-lambda.mjs "${{ steps.build.outputs.image }}"
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          URL=$(node -e "
+            const {LambdaClient,GetFunctionUrlConfigCommand}=require('@aws-sdk/client-lambda');
+            new LambdaClient({region:process.env.AWS_REGION})
+              .send(new GetFunctionUrlConfigCommand({FunctionName:'scrab-convert'}))
+              .then(r=>console.log(r.FunctionUrl));
+          ")
+          echo "Function URL: $URL"
+          # The first call pays the cold start, which for a ~500 MB image is
+          # seconds rather than milliseconds. Retry rather than fail the deploy
+          # over a slow first wake-up.
+          for i in 1 2 3 4 5; do
+            if curl -fsS --max-time 60 "${URL}health"; then
+              echo; echo "Healthy."; exit 0
+            fi
+            echo "attempt $i failed, retrying..."
+            sleep 10
+          done
+          echo "Health check never passed."
+          exit 1
