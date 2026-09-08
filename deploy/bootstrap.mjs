@@ -171,9 +171,21 @@ if (!email) {
   );
 }
 
-const repo = (await ecr.send(new DescribeRepositoriesCommand({ repositoryNames: [NAME] })))
-  .repositories[0].repositoryUri;
+// Read back what was created, and say plainly when nothing was. A stack trace
+// here would bury the one thing worth knowing: the policy is not attached yet.
+try {
+  const repo = (await ecr.send(new DescribeRepositoriesCommand({ repositoryNames: [NAME] })))
+    .repositories[0].repositoryUri;
 
-console.log(`\nECR_REPOSITORY=${repo}`);
-console.log(`LAMBDA_ROLE_ARN=arn:aws:iam::${account}:role/${ROLE}`);
-console.log("\nSetup complete. Push to main and the workflow builds and deploys.");
+  console.log(`\nECR_REPOSITORY=${repo}`);
+  console.log(`LAMBDA_ROLE_ARN=arn:aws:iam::${account}:role/${ROLE}`);
+  console.log("\nSetup complete. Push to main and the workflow builds and deploys.");
+} catch (err) {
+  if (err.name === "AccessDeniedException" || err.name === "RepositoryNotFoundException") {
+    console.error(`\nNothing was created — the deploy user has no permissions yet.`);
+    console.error(`Attach deploy/aws-iam-policy.json to the IAM user, then run this again.`);
+    console.error(`It is idempotent, so re-running costs nothing and skips what exists.`);
+    process.exit(1);
+  }
+  throw err;
+}
