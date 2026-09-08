@@ -16,6 +16,7 @@ import {
   GetFunctionCommand,
   CreateFunctionUrlConfigCommand,
   GetFunctionUrlConfigCommand,
+  UpdateFunctionUrlConfigCommand,
   AddPermissionCommand,
   PutFunctionConcurrencyCommand,
 } from "@aws-sdk/client-lambda";
@@ -143,21 +144,40 @@ console.log(`concurrency capped at ${MAX_PARALLEL}`);
 // AuthType NONE because browsers call this directly and cannot sign requests.
 // The exposure is bounded by the concurrency cap above and by the fact that
 // the function can do nothing but convert a buffer and write a log line.
+/**
+ * CORS, without which a browser refuses the response even though the request
+ * succeeded — and curl, which ignores CORS entirely, reports everything as
+ * fine. That gap is worth guarding: a URL recreated by hand in the console
+ * comes back with no CORS at all, which looks like a dead server from the app
+ * and a healthy one from the command line.
+ */
+const CORS = {
+  AllowOrigins: ["*"],
+  AllowMethods: ["GET", "POST"],
+  AllowHeaders: ["content-type"],
+  ExposeHeaders: ["content-disposition", "x-convert-ms"],
+  MaxAge: 86400,
+};
+
 let url;
 try {
-  url = (await lambda.send(new GetFunctionUrlConfigCommand({ FunctionName: NAME }))).FunctionUrl;
+  const existing = await lambda.send(new GetFunctionUrlConfigCommand({ FunctionName: NAME }));
+  url = existing.FunctionUrl;
+  // Reassert it every deploy rather than trusting what is there.
+  if (!existing.Cors?.AllowOrigins?.length) {
+    await lambda.send(new UpdateFunctionUrlConfigCommand({
+      FunctionName: NAME,
+      AuthType: "NONE",
+      Cors: CORS,
+    }));
+    console.log("restored missing CORS configuration");
+  }
 } catch (err) {
   if (err.name !== "ResourceNotFoundException") throw err;
   url = (await lambda.send(new CreateFunctionUrlConfigCommand({
     FunctionName: NAME,
     AuthType: "NONE",
-    Cors: {
-      AllowOrigins: ["*"],
-      AllowMethods: ["GET", "POST"],
-      AllowHeaders: ["content-type"],
-      ExposeHeaders: ["content-disposition", "x-convert-ms"],
-      MaxAge: 86400,
-    },
+    Cors: CORS,
   }))).FunctionUrl;
 
   // A Function URL with AuthType NONE still needs this resource policy before

@@ -38,16 +38,33 @@ const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS ?? "")
   .map((s) => s.trim())
   .filter(Boolean);
 
+/**
+ * On Lambda, the Function URL applies CORS itself, at the platform edge.
+ *
+ * Both layers adding the header is not additive — it produces two
+ * `Access-Control-Allow-Origin` headers on one response, which every browser
+ * rejects outright. And because curl ignores CORS entirely, the endpoint tests
+ * perfectly from a terminal while being unusable from a page: a failure that
+ * only appears in the one place that matters.
+ *
+ * So the platform owns CORS where it has an opinion, and this middleware
+ * covers every other host. AWS_LAMBDA_FUNCTION_NAME is set by the runtime and
+ * is the reliable signal for which case we are in.
+ */
+const ON_LAMBDA = Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME);
+
 const app = express();
 app.disable("x-powered-by");
-app.use(
-  cors({
-    // No allowlist configured means local development; in production the
-    // deploy sets CORS_ORIGINS and anything else is refused.
-    origin: ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS : true,
-    methods: ["GET", "POST", "OPTIONS"],
-  })
-);
+if (!ON_LAMBDA) {
+  app.use(
+    cors({
+      // No allowlist configured means local development; in production the
+      // deploy sets CORS_ORIGINS and anything else is refused.
+      origin: ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS : true,
+      methods: ["GET", "POST", "OPTIONS"],
+    })
+  );
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
