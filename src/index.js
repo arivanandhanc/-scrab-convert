@@ -15,6 +15,7 @@ import multer from "multer";
 import cors from "cors";
 import path from "node:path";
 import { convert, ConvertError, TARGETS, SOURCES, TIMEOUT_MS, newJobId } from "./convert.js";
+import { check, AUTH_CONFIGURED } from "./auth.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
 
@@ -162,7 +163,17 @@ app.get("/capabilities", (_req, res) => {
   });
 });
 
-app.post("/convert", upload.single("file"), async (req, res) => {
+app.post("/convert", (req, res, next) => {
+  // Checked before multer, so an unauthorised request is refused before we
+  // spend memory buffering its upload. Doing this after the upload would let
+  // anyone make the server hold 5 MB per request just by asking.
+  const denied = check(req);
+  if (denied) {
+    console.warn(JSON.stringify({ denied: denied.status, ip: (req.headers["x-forwarded-for"] ?? "").split(",")[0] }));
+    return res.status(denied.status).json({ error: denied.error });
+  }
+  next();
+}, upload.single("file"), async (req, res) => {
   const job = newJobId();
   const target = String(req.query.to ?? req.body?.to ?? "").toLowerCase();
 
