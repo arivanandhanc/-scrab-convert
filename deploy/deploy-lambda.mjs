@@ -178,7 +178,12 @@ console.log(`concurrency capped at ${MAX_PARALLEL}`);
 const CORS = {
   AllowOrigins: ["*"],
   AllowMethods: ["GET", "POST"],
-  AllowHeaders: ["content-type"],
+  // x-convert-token has to be listed. Sending any custom header makes the
+  // request non-simple, so the browser preflights it first and refuses the
+  // real request when the header is not allowed — and the failure surfaces as
+  // a generic network error, the same shape as the server being unreachable.
+  // curl sends no preflight, so the identical request passes from a terminal.
+  AllowHeaders: ["content-type", "x-convert-token"],
   ExposeHeaders: ["content-disposition", "x-convert-ms"],
   MaxAge: 86400,
 };
@@ -187,14 +192,18 @@ let url;
 try {
   const existing = await lambda.send(new GetFunctionUrlConfigCommand({ FunctionName: NAME }));
   url = existing.FunctionUrl;
-  // Reassert it every deploy rather than trusting what is there.
-  if (!existing.Cors?.AllowOrigins?.length) {
+  // Reassert it every deploy rather than trusting what is there. Checking the
+  // header list too, not just that CORS exists at all: an older config that
+  // predates a new custom header is present but wrong, which fails in exactly
+  // the same invisible way as having no CORS.
+  const headersOk = CORS.AllowHeaders.every((h) => existing.Cors?.AllowHeaders?.includes(h));
+  if (!existing.Cors?.AllowOrigins?.length || !headersOk) {
     await lambda.send(new UpdateFunctionUrlConfigCommand({
       FunctionName: NAME,
       AuthType: "NONE",
       Cors: CORS,
     }));
-    console.log("restored missing CORS configuration");
+    console.log("reasserted CORS configuration (origins + allowed headers)");
   }
 } catch (err) {
   if (err.name !== "ResourceNotFoundException") throw err;
