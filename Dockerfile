@@ -11,19 +11,25 @@ FROM debian:bookworm-slim
 # metapackage pulls in Java and a desktop stack we never touch, roughly
 # tripling the image. A bigger image is a slower cold start, and on a
 # scale-to-zero host cold start is the number the user actually feels.
+#
+# No Java. `default-jre-headless` is ~180 MB and LibreOffice only needs it for
+# Base, the wizards and a few exotic filters — none of which are on any path
+# through this service. Document and spreadsheet conversion to PDF works
+# without it. If a filter ever complains about a missing JRE, add it back here
+# rather than working around it in code.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libreoffice-writer \
-      libreoffice-calc \
-      libreoffice-impress \
-      libreoffice-core \
-      default-jre-headless \
+      libreoffice-writer-nogui \
+      libreoffice-calc-nogui \
+      libreoffice-impress-nogui \
+      libreoffice-core-nogui \
       fonts-dejavu-core \
       fonts-liberation2 \
       curl \
       ca-certificates \
       nodejs \
       npm \
-  && rm -rf /var/lib/apt/lists/*
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man /var/cache/apt/*
 
 WORKDIR /app
 
@@ -41,6 +47,10 @@ ENV PORT=8080
 # Warm the profile at build time so the first real request doesn't pay for it.
 # Without this the first conversion after a cold start takes several seconds
 # longer than every one after it, which reads as "the site is broken".
+#
+# It doubles as a smoke test: if the -nogui packages ever stop providing
+# `soffice` on PATH, this fails the build with an obvious error instead of
+# shipping an image that 500s on its first real conversion.
 RUN mkdir -p /tmp/lo-warm \
  && printf 'warmup' > /tmp/warm.txt \
  && soffice --headless --norestore \

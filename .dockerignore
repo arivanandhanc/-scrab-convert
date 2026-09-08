@@ -1,0 +1,9 @@
+# The image installs its own dependencies; a Windows-built node_modules would
+# be both useless and the largest thing in the build context.
+node_modules
+.git
+.gitignore
+*.log
+README.md
+render.yaml
+client
