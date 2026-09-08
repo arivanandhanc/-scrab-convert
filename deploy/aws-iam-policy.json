@@ -38,7 +38,9 @@
         "lambda:AddPermission",
         "lambda:RemovePermission",
         "lambda:PutFunctionConcurrency",
-        "lambda:GetAccountSettings"
+        "lambda:GetAccountSettings",
+        "lambda:GetPolicy",
+        "lambda:InvokeFunction"
       ],
       "Resource": "arn:aws:lambda:*:307642361007:function:scrab-convert*"
     },
